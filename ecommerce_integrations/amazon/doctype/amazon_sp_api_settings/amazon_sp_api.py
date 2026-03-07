@@ -27,7 +27,8 @@ MARKETPLACES = {
 		"MX": "A1AM78C64UM0Y8",
 		"BR": "A2Q3Y263D00KWC",
 		"AWS Region": "us-east-1",
-		"Endpoint": "https://sellingpartnerapi-na.amazon.com",
+		# "Endpoint": "https://sandbox.sellingpartnerapi-na.amazon.com",
+		"Endpoint": "https://sellingpartnerapi-na.amazon.com",		
 	},
 	"Europe": {
 		"ES": "A1RKKUPIHCS9HS",
@@ -45,6 +46,7 @@ MARKETPLACES = {
 		"IN": "A21TJRUUN4KGV",
 		"AWS Region": "eu-west-1",
 		"Endpoint": "https://sellingpartnerapi-eu.amazon.com",
+		# "Endpoint": "https://sandbox.sellingpartnerapi-eu.amazon.com",
 	},
 	"Far East": {
 		"SG": "A19VAU5U5O7RUS",
@@ -224,6 +226,7 @@ class SPAPI(object):
 		aws_access_key: str,
 		aws_secret_key: str,
 		country_code: str = "US",
+		use_sandbox=False,
 	) -> None:
 		self.iam_arn = iam_arn
 		self.client_id = client_id
@@ -232,7 +235,15 @@ class SPAPI(object):
 		self.aws_access_key = aws_access_key
 		self.aws_secret_key = aws_secret_key
 		self.country_code = country_code
-		self.region, self.endpoint, self.marketplace_id = Util.get_marketplace_data(country_code)
+		self.region, endpoint, self.marketplace_id = Util.get_marketplace_data(country_code)
+
+		if use_sandbox:
+			self.endpoint = endpoint.replace(
+				"sellingpartnerapi",
+				"sandbox.sellingpartnerapi"
+			)
+		else:
+			self.endpoint = endpoint
 
 	def get_access_token(self) -> str:
 		data = {
@@ -290,6 +301,10 @@ class SPAPI(object):
 
 		url = self.endpoint + self.BASE_URI + append_to_base_uri
 
+		print("AMAZON ENDPOINT:", self.endpoint)
+		print("URL:", url)
+		print("PARAMS:", params)
+		print("HEADERS:", self.get_headers())
 		response = request(
 			method=method,
 			url=url,
@@ -304,6 +319,7 @@ class SPAPI(object):
 		if values and isinstance(values, list):
 			for idx in range(len(values)):
 				data[f"{key}[{idx}]"] = values[idx]
+				# data[f"{key}.{idx}"] = values[idx]
 
 
 class Finances(SPAPI):
@@ -392,7 +408,7 @@ class CatalogItems(SPAPI):
 
 		append_to_base_uri = f"/items/{asin}"
 		data = dict(MarketplaceId=marketplace_id)
-
+		# data = dict(MarketplaceId="A17E79C6D8DWNP")
 		return self.make_request(append_to_base_uri=append_to_base_uri, params=data)
 
 

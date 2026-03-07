@@ -27,6 +27,7 @@ class AmazonRepository:
 			amz_setting = frappe.get_doc("Amazon SP API Settings", amz_setting)
 
 		self.amz_setting = amz_setting
+		# sandbox implementation
 		self.instance_params = dict(
 			iam_arn=self.amz_setting.iam_arn,
 			client_id=self.amz_setting.client_id,
@@ -35,7 +36,17 @@ class AmazonRepository:
 			aws_access_key=self.amz_setting.aws_access_key,
 			aws_secret_key=self.amz_setting.get_password("aws_secret_key"),
 			country_code=self.amz_setting.country,
+			use_sandbox=self.amz_setting.use_sandbox,
 		)
+		# self.instance_params = dict(
+		# 	iam_arn=self.amz_setting.iam_arn,
+		# 	client_id=self.amz_setting.client_id,
+		# 	client_secret=self.amz_setting.get_password("client_secret"),
+		# 	refresh_token=self.amz_setting.refresh_token,
+		# 	aws_access_key=self.amz_setting.aws_access_key,
+		# 	aws_secret_key=self.amz_setting.get_password("aws_secret_key"),
+		# 	country_code=self.amz_setting.country,
+		# )
 
 	def return_as_list(self, input) -> list:
 		if isinstance(input, list):
@@ -49,20 +60,51 @@ class AmazonRepository:
 
 		for x in range(max_retries):
 			try:
+				print("\n===== CALLING SP API METHOD =====")
+				print("Method:", sp_api_method.__name__)
+				print("Kwargs:", kwargs)
+
 				result = sp_api_method(**kwargs)
-				return result.get("payload")
+
+				print("RAW RESULT:", result)
+
+				if not result:
+					print("SP API returned None")
+					return None
+
+				payload = result.get("payload")
+
+				print("PAYLOAD:", payload)
+
+				return payload
+
 			except SPAPIError as e:
+				print("\n===== SPAPIError OCCURRED =====")
+				print("Error Code:", e.error)
+				print("Error Description:", e.error_description)
+				print("Retry:", x + 1, "/", max_retries)
+
 				if e.error not in errors:
 					errors[e.error] = e.error_description
 
 				time.sleep(1)
 				continue
 
+			except Exception as e:
+				import traceback
+				print("\n===== UNKNOWN EXCEPTION =====")
+				traceback.print_exc()
+				raise
+
+		print("\n===== MAX RETRIES EXCEEDED =====")
+		print("Errors Collected:", errors)
+
 		for error in errors:
 			msg = f"<b>Error:</b> {error}<br/><b>Error Description:</b> {errors.get(error)}"
 			frappe.msgprint(msg, alert=True, indicator="red")
 			frappe.log_error(
-				message=f"{error}: {errors.get(error)}", title=f'Method "{sp_api_method.__name__}" failed',
+				message=f"{error}: {errors.get(error)}",
+				title=f'Method "{sp_api_method.__name__}" failed',
 			)
 
 		self.amz_setting.enable_sync = 0
@@ -270,6 +312,10 @@ class AmazonRepository:
 		return item_code
 
 	def get_order_items(self, order_id) -> list:
+	    # Sandbox does not support order items API
+		if self.amz_setting.use_sandbox:
+			return []
+	
 		orders = self.get_orders_instance()
 		order_items_payload = self.call_sp_api_method(
 			sp_api_method=orders.get_order_items, order_id=order_id
@@ -430,6 +476,11 @@ class AmazonRepository:
 			return so.name
 
 	def get_orders(self, created_after) -> list:
+		created_after_value = created_after
+
+		if self.amz_setting.use_sandbox:
+			created_after_value = "TEST_CASE_200"
+
 		orders = self.get_orders_instance()
 		order_statuses = [
 			"PendingAvailability",
@@ -443,16 +494,26 @@ class AmazonRepository:
 		]
 		fulfillment_channels = ["FBA", "SellerFulfilled"]
 
+		# Sandbox requires minimal parameters
+		if self.amz_setting.use_sandbox:
+			order_statuses = None
+			fulfillment_channels = None
+
 		orders_payload = self.call_sp_api_method(
 			sp_api_method=orders.get_orders,
-			created_after=created_after,
+			created_after=created_after_value,
 			order_statuses=order_statuses,
 			fulfillment_channels=fulfillment_channels,
 			max_results=50,
 		)
 
+
+		print("DEBUG AMAZON RESPONSE:", orders_payload)
 		sales_orders = []
 
+		if not orders_payload:
+			frappe.throw("Amazon returned empty response. Check API permissions.")
+		
 		while True:
 			orders_list = orders_payload.get("Orders")
 			next_token = orders_payload.get("NextToken")
@@ -461,6 +522,13 @@ class AmazonRepository:
 				break
 
 			for order in orders_list:
+				# Skip Sales Order creation in sandbox
+				if self.amz_setting.use_sandbox:
+					frappe.logger().info(
+						f"Amazon Sandbox Order Retrieved: {order.get('AmazonOrderId')}"
+					)
+					continue		
+						
 				sales_order = self.create_sales_order(order)
 				if sales_order:
 					sales_orders.append(sales_order)
@@ -469,7 +537,7 @@ class AmazonRepository:
 				break
 
 			orders_payload = self.call_sp_api_method(
-				sp_api_method=orders.get_orders, created_after=created_after, next_token=next_token,
+				sp_api_method=orders.get_orders, created_after=created_after_value, next_token=next_token,
 			)
 
 		return sales_orders

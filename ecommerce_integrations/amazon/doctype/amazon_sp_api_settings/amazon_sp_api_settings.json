@@ -37,7 +37,8 @@
   "column_break_4",
   "enable_sync",
   "max_retry_limit",
-  "is_old_data_migrated"
+  "is_old_data_migrated",
+  "use_sandbox"
  ],
  "fields": [
   {
@@ -254,10 +255,18 @@
    "fieldname": "create_item_if_not_exists",
    "fieldtype": "Check",
    "label": "Create Item If Not Exists"
+  },
+  {
+   "default": "0",
+   "fieldname": "use_sandbox",
+   "fieldtype": "Check",
+   "label": "Use Sandbox",
+   "print_hide": 1,
+   "report_hide": 1
   }
  ],
  "links": [],
- "modified": "2023-07-31 17:20:21.492153",
+ "modified": "2026-03-07 18:05:06.917230",
  "modified_by": "Administrator",
  "module": "Amazon",
  "name": "Amazon SP API Settings",
@@ -274,6 +283,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],

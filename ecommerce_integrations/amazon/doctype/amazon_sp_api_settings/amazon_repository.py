@@ -60,21 +60,21 @@ class AmazonRepository:
 
 		for x in range(max_retries):
 			try:
-				print("\n===== CALLING SP API METHOD =====")
-				print("Method:", sp_api_method.__name__)
-				print("Kwargs:", kwargs)
+				# print("\n===== CALLING SP API METHOD =====")
+				# print("Method:", sp_api_method.__name__)
+				# print("Kwargs:", kwargs)
 
 				result = sp_api_method(**kwargs)
 
-				print("RAW RESULT:", result)
+				# print("RAW RESULT:", result)
 
 				if not result:
-					print("SP API returned None")
+					# print("SP API returned None")
 					return None
 
 				payload = result.get("payload")
 
-				print("PAYLOAD:", payload)
+				# print("PAYLOAD:", payload)
 
 				return payload
 
@@ -194,11 +194,65 @@ class AmazonRepository:
 
 	def get_orders_instance(self) -> Orders:
 		return Orders(**self.instance_params)
+	
+	# def create_item(self, order_item) -> str:
+
+	# 	def create_item_price(item_code, rate):
+	# 		item_price = frappe.new_doc("Item Price")
+	# 		item_price.price_list = self.amz_setting.price_list
+	# 		item_price.price_list_rate = rate or 0
+	# 		item_price.item_code = item_code
+	# 		item_price.insert(ignore_permissions=True)
+
+	# 	def create_ecommerce_item(order_item, item_code):
+	# 		ecommerce_item = frappe.new_doc("Ecommerce Item")
+	# 		ecommerce_item.integration = frappe.get_meta("Amazon SP API Settings").module
+	# 		ecommerce_item.erpnext_item_code = item_code
+	# 		ecommerce_item.integration_item_code = order_item.get("ASIN")
+	# 		ecommerce_item.sku = order_item.get("SellerSKU")
+	# 		ecommerce_item.insert(ignore_permissions=True)
+
+	# 	print("\n===== CREATING ITEM WITHOUT CATALOG API =====")
+	# 	print("ORDER ITEM:", order_item)
+
+	# 	item = frappe.new_doc("Item")
+
+	# 	# Apply field mappings from settings
+	# 	for field_map in self.amz_setting.amazon_fields_map:
+
+	# 		amazon_value = order_item.get(field_map.amazon_field)
+
+	# 		if field_map.use_to_find_item_code:
+	# 			item.item_code = amazon_value
+
+	# 		if field_map.item_field:
+	# 			setattr(item, field_map.item_field, amazon_value)
+
+	# 	# Default item name if mapping not defined
+	# 	if not item.item_name:
+	# 		item.item_name = order_item.get("Title")
+
+	# 	# Default group from settings
+	# 	item.item_group = self.amz_setting.parent_item_group
+
+	# 	item.stock_uom = "Nos"
+	# 	item.is_stock_item = 1
+
+	# 	item.insert(ignore_permissions=True)
+
+	# 	rate = order_item.get("ItemPrice", {}).get("Amount", 0)
+
+	# 	create_item_price(item.item_code, rate)
+	# 	create_ecommerce_item(order_item, item.item_code)
+
+	# 	return item.item_code	
 
 	def create_item(self, order_item) -> str:
-		def create_item_group(amazon_item) -> str:
-			item_group_name = amazon_item.get("AttributeSets")[0].get("ProductGroup")
 
+		def create_item_group(amazon_item) -> str:
+			# item_group_name = amazon_item.get("AttributeSets")[0].get("ProductGroup")
+			attributes = (amazon_item.get("AttributeSets") or [{}])[0]
+			item_group_name = attributes.get("ProductGroup")
 			if item_group_name:
 				item_group = frappe.db.get_value("Item Group", filters={"item_group_name": item_group_name})
 
@@ -213,7 +267,9 @@ class AmazonRepository:
 			raise (KeyError("ProductGroup"))
 
 		def create_brand(amazon_item) -> str:
-			brand_name = amazon_item.get("AttributeSets")[0].get("Brand")
+			# brand_name = amazon_item.get("AttributeSets")[0].get("Brand")
+			attributes = (amazon_item.get("AttributeSets") or [{}])[0]
+			brand_name = attributes.get("Brand")
 
 			if not brand_name:
 				return
@@ -228,8 +284,9 @@ class AmazonRepository:
 			return existing_brand
 
 		def create_manufacturer(amazon_item) -> str:
-			manufacturer_name = amazon_item.get("AttributeSets")[0].get("Manufacturer")
-
+			# manufacturer_name = amazon_item.get("AttributeSets")[0].get("Manufacturer")
+			attributes = (amazon_item.get("AttributeSets") or [{}])[0]
+			manufacturer_name = attributes.get("Manufacturer")
 			if not manufacturer_name:
 				return
 
@@ -261,8 +318,29 @@ class AmazonRepository:
 			ecommerce_item.sku = order_item["SellerSKU"]
 			ecommerce_item.insert(ignore_permissions=True)
 
-		catalog_items = self.get_catalog_items_instance()
-		amazon_item = catalog_items.get_catalog_item(order_item["ASIN"])["payload"]
+		amazon_item = {}
+		try:
+			catalog_items = self.get_catalog_items_instance()
+			# amazon_item = catalog_items.get_catalog_item(order_item["ASIN"])["payload"]
+			catalog_response = catalog_items.get_catalog_item(order_item["ASIN"])
+			print("CATALOG RESPONSE:", catalog_response)
+
+			amazon_item = catalog_response.get("payload", {})		
+			print("PAYLOAD:", amazon_item)	
+
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(),
+				"Amazon Catalog API failed while creating item"
+			)
+
+		# print("\n========== DEBUG ITEM CREATION ==========")
+		# print("ORDER ITEM:", order_item)
+		# print("CATALOG RESPONSE:", catalog_response)
+		# print("AMAZON ITEM:", amazon_item)
+		# print("ATTRIBUTE SETS:", amazon_item.get("AttributeSets"))
+		# print("=========================================\n")
+
 
 		item = frappe.new_doc("Item")
 
@@ -284,7 +362,15 @@ class AmazonRepository:
 		return item.item_code
 
 	def get_item_code(self, order_item) -> str:
+
 		for field_map in self.amz_setting.amazon_fields_map:
+
+			print("FIELD MAP:", field_map.amazon_field, field_map.item_field)
+
+			print("SEARCHING ITEM WITH:", {
+				field_map.item_field: order_item.get(field_map.amazon_field)
+			})
+
 			if field_map.use_to_find_item_code:
 				item_code = frappe.db.get_value(
 					"Item",
@@ -293,7 +379,9 @@ class AmazonRepository:
 				)
 
 				if item_code:
+					print("ITEM FOUND:", item_code)
 					return item_code
+
 				elif not self.amz_setting.create_item_if_not_exists:
 					field_label = frappe.get_meta("Item").get_label(field_map.item_field)
 					frappe.throw(
@@ -308,6 +396,8 @@ class AmazonRepository:
 		else:
 			frappe.throw(_("At least one field must be selected to find the item code."))
 
+		print("ITEM NOT FOUND → CREATING NEW ITEM")
+
 		item_code = self.create_item(order_item)
 		return item_code
 
@@ -321,15 +411,19 @@ class AmazonRepository:
 			sp_api_method=orders.get_order_items, order_id=order_id
 		)
 
+
+		order_items_list = order_items_payload.get("OrderItems")
 		final_order_items = []
 		warehouse = self.amz_setting.warehouse
-
+		print("ORDER ITEMS PAYLOAD:", order_items_payload)
+		print("ORDER ITEMS LIST:", order_items_list)
 		while True:
 			order_items_list = order_items_payload.get("OrderItems")
 			next_token = order_items_payload.get("NextToken")
-
+			
 			for order_item in order_items_list:
-				if order_item.get("QuantityOrdered") > 0:
+				print("PROCESSING ORDER ITEM:", order_item)
+				if int(order_item.get("QuantityOrdered", 0)) > 0:
 					final_order_items.append(
 						{
 							"item_code": self.get_item_code(order_item),
@@ -438,16 +532,27 @@ class AmazonRepository:
 			return so
 		else:
 			items = self.get_order_items(order_id)
+			print("DEBUG ORDER ITEMS:", items)
 
 			if not items:
+				print("NO ITEMS FOUND FOR ORDER:", order_id)
 				return
 
 			customer_name = create_customer(order)
 			create_address(order, customer_name)
 
-			delivery_date = dateutil.parser.parse(order.get("LatestShipDate")).strftime("%Y-%m-%d")
-			transaction_date = dateutil.parser.parse(order.get("PurchaseDate")).strftime("%Y-%m-%d")
+			# delivery_date = dateutil.parser.parse(order.get("LatestShipDate")).strftime("%Y-%m-%d")
+			# transaction_date = dateutil.parser.parse(order.get("PurchaseDate")).strftime("%Y-%m-%d")
+			purchase_date = dateutil.parser.parse(order.get("PurchaseDate")).date()
+			ship_date = dateutil.parser.parse(order.get("LatestShipDate")).date()
 
+			# ERPNext requires delivery >= transaction
+			if ship_date < purchase_date:
+				ship_date = purchase_date
+
+			transaction_date = purchase_date
+			delivery_date = ship_date
+			
 			so = frappe.new_doc("Sales Order")
 			so.amazon_order_id = order_id
 			so.marketplace_id = order.get("MarketplaceId")
@@ -529,6 +634,10 @@ class AmazonRepository:
 					)
 					continue		
 						
+				# skip order if already canceled
+				if order.get("OrderStatus") == "Canceled":
+					continue
+
 				sales_order = self.create_sales_order(order)
 				if sales_order:
 					sales_orders.append(sales_order)

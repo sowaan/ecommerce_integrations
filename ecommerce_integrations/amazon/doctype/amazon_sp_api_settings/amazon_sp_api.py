@@ -301,10 +301,10 @@ class SPAPI(object):
 
 		url = self.endpoint + self.BASE_URI + append_to_base_uri
 
-		print("AMAZON ENDPOINT:", self.endpoint)
-		print("URL:", url)
-		print("PARAMS:", params)
-		print("HEADERS:", self.get_headers())
+		# print("AMAZON ENDPOINT:", self.endpoint)
+		# print("URL:", url)
+		# print("PARAMS:", params)
+		# print("HEADERS:", self.get_headers())
 		response = request(
 			method=method,
 			url=url,
@@ -396,22 +396,41 @@ class Orders(SPAPI):
 		return self.make_request(append_to_base_uri=append_to_base_uri, params=data)
 
 
+# class CatalogItems(SPAPI):
+# 	""" Amazon Catalog Items API """
+
+# 	BASE_URI = "/catalog/v0"
+
+# 	def get_catalog_item(self, asin: str, marketplace_id: str = None,) -> dict:
+# 		""" Returns a specified item and its attributes. """
+# 		if not marketplace_id:
+# 			marketplace_id = self.marketplace_id
+
+# 		append_to_base_uri = f"/items/{asin}"
+# 		data = dict(MarketplaceId=marketplace_id)
+# 		# data = dict(MarketplaceId="A17E79C6D8DWNP")
+# 		return self.make_request(append_to_base_uri=append_to_base_uri, params=data)
+
 class CatalogItems(SPAPI):
-	""" Amazon Catalog Items API """
+    """ Amazon Catalog Items API """
 
-	BASE_URI = "/catalog/v0"
+    BASE_URI = "/catalog/2022-04-01"
 
-	def get_catalog_item(self, asin: str, marketplace_id: str = None,) -> dict:
-		""" Returns a specified item and its attributes. """
-		if not marketplace_id:
-			marketplace_id = self.marketplace_id
+    def get_catalog_item(self, asin: str, marketplace_id: str = None) -> dict:
+        if not marketplace_id:
+            marketplace_id = self.marketplace_id
 
-		append_to_base_uri = f"/items/{asin}"
-		data = dict(MarketplaceId=marketplace_id)
-		# data = dict(MarketplaceId="A17E79C6D8DWNP")
-		return self.make_request(append_to_base_uri=append_to_base_uri, params=data)
+        append_to_base_uri = f"/items/{asin}"
 
+        data = {
+            "marketplaceIds": marketplace_id,
+            "includedData": "attributes,images,productTypes"
+        }
 
+        return self.make_request(
+            append_to_base_uri=append_to_base_uri,
+            params=data
+        )
 class Util:
 	@staticmethod
 	def get_marketplace(country_code):

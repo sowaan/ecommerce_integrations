@@ -649,6 +649,10 @@ class AmazonRepository:
 				sp_api_method=orders.get_orders, created_after=created_after_value, next_token=next_token,
 			)
 
+	# 	frappe.log_error("Get Orders Result", f"""
+	# sales orders: {sales_orders}
+	# orders list: {orders_list}
+	# 		""")
 		return sales_orders
 
 	def get_catalog_items_instance(self) -> CatalogItems:

@@ -57,12 +57,12 @@ class AmazonSPAPISettings(Document):
 					frappe.throw(_("Row #{0}: Item Field is required.").format(field_map.idx))
 
 				# `Item Field` should be unique if `Use To Find Item Code` is checked.
-				elif not field_meta.unique:
-					frappe.throw(
-						_("Row #{0}: Item Field {1} must be unique.").format(
-							field_map.idx, frappe.bold(field_map.item_field)
-						)
-					)
+				# elif not field_meta.unique:
+				# 	frappe.throw(
+				# 		_("Row #{0}: Item Field {1} must be unique.").format(
+				# 			field_map.idx, frappe.bold(field_map.item_field)
+				# 		)
+				# 	)
 
 				count += 1
 

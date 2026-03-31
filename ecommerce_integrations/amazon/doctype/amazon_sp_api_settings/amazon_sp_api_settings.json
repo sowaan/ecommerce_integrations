@@ -5,6 +5,7 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "title",
   "is_active",
   "section_break_4",
   "iam_arn",
@@ -263,10 +264,15 @@
    "label": "Use Sandbox",
    "print_hide": 1,
    "report_hide": 1
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "label": "Title"
   }
  ],
  "links": [],
- "modified": "2026-03-11 15:01:15.649318",
+ "modified": "2026-03-31 12:08:16.363415",
  "modified_by": "Administrator",
  "module": "Amazon",
  "name": "Amazon SP API Settings",
@@ -284,8 +290,10 @@
   }
  ],
  "row_format": "Dynamic",
+ "show_title_field_in_link": 1,
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
+ "title_field": "title",
  "track_changes": 1
 }

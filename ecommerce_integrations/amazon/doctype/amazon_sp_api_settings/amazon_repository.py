@@ -22,6 +22,7 @@ from ecommerce_integrations.amazon.doctype.amazon_sp_api_settings.amazon_sp_api_
 
 
 class AmazonRepository:
+
 	def __init__(self, amz_setting: str | AmazonSPAPISettings) -> None:
 		if isinstance(amz_setting, str):
 			amz_setting = frappe.get_doc("Amazon SP API Settings", amz_setting)
@@ -248,40 +249,46 @@ class AmazonRepository:
 	# 	return item.item_code	
 
 	def create_item(self, order_item) -> str:
-
+		def get_attr(amazon_item, key):
+			values = amazon_item.get("attributes", {}).get(key) or []
+			return values[0].get("value") if values else None
+			
 		def create_item_group(amazon_item) -> str:
-			# item_group_name = amazon_item.get("AttributeSets")[0].get("ProductGroup")
-			attributes = (amazon_item.get("AttributeSets") or [{}])[0]
-			item_group_name = attributes.get("ProductGroup")
-			if item_group_name:
-				item_group = frappe.db.get_value("Item Group", filters={"item_group_name": item_group_name})
+			product_types = amazon_item.get("productTypes") or []
 
-				if not item_group:
-					new_item_group = frappe.new_doc("Item Group")
-					new_item_group.item_group_name = item_group_name
-					new_item_group.parent_item_group = self.amz_setting.parent_item_group
-					new_item_group.insert()
-					return new_item_group.item_group_name
-				return item_group
+			item_group_name = (
+				product_types[0].get("productType") if product_types else None
+			)
 
-			raise (KeyError("ProductGroup"))
+			if not item_group_name:
+				return self.amz_setting.parent_item_group  # ✅ fallback
 
-		def create_brand(amazon_item) -> str:
-			# brand_name = amazon_item.get("AttributeSets")[0].get("Brand")
-			attributes = (amazon_item.get("AttributeSets") or [{}])[0]
-			brand_name = attributes.get("Brand")
+			item_group = frappe.db.get_value(
+				"Item Group", {"item_group_name": item_group_name}
+			)
 
+			if not item_group:
+				new_item_group = frappe.new_doc("Item Group")
+				new_item_group.item_group_name = item_group_name
+				new_item_group.parent_item_group = self.amz_setting.parent_item_group
+				new_item_group.insert(ignore_permissions=True)
+				return new_item_group.item_group_name
+
+			return item_group
+
+		def create_brand(amazon_item):
+			brand_name = get_attr(amazon_item, "brand")
 			if not brand_name:
 				return
 
-			existing_brand = frappe.db.get_value("Brand", filters={"brand": brand_name})
+			existing = frappe.db.get_value("Brand", {"brand": brand_name})
+			if existing:
+				return existing
 
-			if not existing_brand:
-				brand = frappe.new_doc("Brand")
-				brand.brand = brand_name
-				brand.insert()
-				return brand.brand
-			return existing_brand
+			brand = frappe.new_doc("Brand")
+			brand.brand = brand_name
+			brand.insert(ignore_permissions=True)
+			return brand.brand
 
 		def create_manufacturer(amazon_item) -> str:
 			# manufacturer_name = amazon_item.get("AttributeSets")[0].get("Manufacturer")
@@ -301,14 +308,15 @@ class AmazonRepository:
 				return manufacturer.short_name
 			return existing_manufacturer
 
-		def create_item_price(amazon_item, item_code) -> None:
+		def create_item_price(amazon_item, item_code):
+			price_list_data = amazon_item.get("attributes", {}).get("list_price") or []
+			rate = price_list_data[0].get("value_with_tax", 0) if price_list_data else 0
+
 			item_price = frappe.new_doc("Item Price")
 			item_price.price_list = self.amz_setting.price_list
-			item_price.price_list_rate = (
-				amazon_item.get("AttributeSets")[0].get("ListPrice", {}).get("Amount") or 0
-			)
+			item_price.price_list_rate = rate
 			item_price.item_code = item_code
-			item_price.insert()
+			item_price.insert(ignore_permissions=True)
 
 		def create_ecommerce_item(order_item, item_code) -> None:
 			ecommerce_item = frappe.new_doc("Ecommerce Item")
@@ -325,7 +333,9 @@ class AmazonRepository:
 			catalog_response = catalog_items.get_catalog_item(order_item["ASIN"])
 			print("CATALOG RESPONSE:", catalog_response)
 
-			amazon_item = catalog_response.get("payload", {})		
+			# amazon_item = catalog_response.get("payload", {})		
+			amazon_item = catalog_response or {}
+
 			print("PAYLOAD:", amazon_item)	
 
 		except Exception:
@@ -346,12 +356,16 @@ class AmazonRepository:
 
 		for field_map in self.amz_setting.amazon_fields_map:
 			if field_map.use_to_find_item_code:
-				item.item_code = order_item[field_map.amazon_field]
+				marketplace = order_item.get("MarketplaceId", "")
+				sku = order_item.get("SellerSKU")
+
+				item.item_code = f"{sku}-{marketplace}"
 
 			if field_map.item_field:
 				setattr(item, field_map.item_field, order_item[field_map.amazon_field])
 
-		item.item_group = create_item_group(amazon_item)
+		item.item_group = create_item_group(amazon_item) or self.amz_setting.parent_item_group
+
 		item.brand = create_brand(amazon_item)
 		item.manufacturer = create_manufacturer(amazon_item)
 		item.insert(ignore_permissions=True)
@@ -365,11 +379,11 @@ class AmazonRepository:
 
 		for field_map in self.amz_setting.amazon_fields_map:
 
-			print("FIELD MAP:", field_map.amazon_field, field_map.item_field)
+			# print("FIELD MAP:", field_map.amazon_field, field_map.item_field)
 
-			print("SEARCHING ITEM WITH:", {
-				field_map.item_field: order_item.get(field_map.amazon_field)
-			})
+			# print("SEARCHING ITEM WITH:", {
+			# 	field_map.item_field: order_item.get(field_map.amazon_field)
+			# })
 
 			if field_map.use_to_find_item_code:
 				item_code = frappe.db.get_value(
@@ -379,7 +393,7 @@ class AmazonRepository:
 				)
 
 				if item_code:
-					print("ITEM FOUND:", item_code)
+					# print("ITEM FOUND:", item_code)
 					return item_code
 
 				elif not self.amz_setting.create_item_if_not_exists:
@@ -415,22 +429,32 @@ class AmazonRepository:
 		order_items_list = order_items_payload.get("OrderItems")
 		final_order_items = []
 		warehouse = self.amz_setting.warehouse
-		print("ORDER ITEMS PAYLOAD:", order_items_payload)
-		print("ORDER ITEMS LIST:", order_items_list)
+
 		while True:
+
+
 			order_items_list = order_items_payload.get("OrderItems")
 			next_token = order_items_payload.get("NextToken")
 			
+		
 			for order_item in order_items_list:
-				print("PROCESSING ORDER ITEM:", order_item)
+				item_code = self.get_item_code(order_item)
+				amount = order_item.get("ItemPrice", {}).get("Amount", 0)
+				quantity = order_item.get("QuantityOrdered", 0)
+				rate = float(amount) / quantity if quantity else 0
+
+				# if item_code == "28-UUX3-SJMN":
+					# print("\n\n\n===== DEBUG ITEM CODE MATCHED =====\n\n\n")
+					# print(order_item)	
+					# print("\n\n\n================ END OF DEBUG =================\n\n\n")
 				if int(order_item.get("QuantityOrdered", 0)) > 0:
 					final_order_items.append(
 						{
-							"item_code": self.get_item_code(order_item),
+							"item_code": item_code,
 							"item_name": order_item.get("SellerSKU"),
 							"description": order_item.get("Title"),
-							"rate": order_item.get("ItemPrice", {}).get("Amount", 0),
-							"qty": order_item.get("QuantityOrdered"),
+							"rate": rate,
+							"qty": quantity,
 							"stock_uom": "Nos",
 							"warehouse": warehouse,
 							"conversion_factor": 1.0,
@@ -532,7 +556,7 @@ class AmazonRepository:
 			return so
 		else:
 			items = self.get_order_items(order_id)
-			print("DEBUG ORDER ITEMS:", items)
+			# print("DEBUG ORDER ITEMS:", items)
 
 			if not items:
 				print("NO ITEMS FOUND FOR ORDER:", order_id)

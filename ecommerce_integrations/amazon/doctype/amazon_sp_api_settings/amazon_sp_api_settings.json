@@ -34,6 +34,8 @@
   "section_break_3",
   "after_date",
   "taxes_charges",
+  "sales_tax_template",
+  "shipment_charges_account",
   "sync_orders",
   "column_break_4",
   "enable_sync",
@@ -269,10 +271,23 @@
    "fieldname": "title",
    "fieldtype": "Data",
    "label": "Title"
+  },
+  {
+   "fieldname": "sales_tax_template",
+   "fieldtype": "Link",
+   "label": "Sales Tax Template",
+   "options": "Sales Taxes and Charges Template"
+  },
+  {
+   "fieldname": "shipment_charges_account",
+   "fieldtype": "Link",
+   "label": "Shipment Charges Account",
+   "link_filters": "[[\"Account\",\"name\",\"like\",\"%amazon%\"]]",
+   "options": "Account"
   }
  ],
  "links": [],
- "modified": "2026-03-31 12:08:16.363415",
+ "modified": "2026-04-01 14:32:18.541141",
  "modified_by": "Administrator",
  "module": "Amazon",
  "name": "Amazon SP API Settings",

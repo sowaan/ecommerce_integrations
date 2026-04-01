@@ -132,6 +132,12 @@ class AmazonRepository:
 		return account_name
 
 	def get_charges_and_fees(self, order_id) -> dict:
+		"""
+		Retrieve charges and fees for an Amazon order from financial events.
+		
+		Fetches financial events from Amazon SP-API and extracts charges and fees
+		from multiple event types including shipment events, service fees, and refunds.
+		"""
 		finances = self.get_finances_instance()
 		financial_events_payload = self.call_sp_api_method(
 			sp_api_method=finances.list_financial_events_by_order_id, order_id=order_id
@@ -139,19 +145,37 @@ class AmazonRepository:
 
 		charges_and_fees = {"charges": [], "fees": []}
 
-		while True:
-			shipment_event_list = financial_events_payload.get("FinancialEvents", {}).get(
-				"ShipmentEventList", []
+		# Validate payload is not None
+		if not financial_events_payload:
+			frappe.logger().warning(
+				f"No financial events payload received for order: {order_id}"
 			)
-			next_token = financial_events_payload.get("NextToken")
+			return charges_and_fees
 
-			for shipment_event in shipment_event_list:
-				if shipment_event:
+		try:
+			while True:
+				# Check if FinancialEvents exists
+				financial_events = financial_events_payload.get("FinancialEvents", {})
+				if not financial_events:
+					frappe.logger().info(
+						f"No FinancialEvents in payload for order: {order_id}"
+					)
+					break
+
+				# Get next token for pagination
+				next_token = financial_events_payload.get("NextToken")
+
+				# ===== Process Shipment Events =====
+				shipment_event_list = financial_events.get("ShipmentEventList", [])
+				for shipment_event in shipment_event_list:
+					if not shipment_event:
+						continue
+
 					for shipment_item in shipment_event.get("ShipmentItemList", []):
-						charges = shipment_item.get("ItemChargeList", [])
-						fees = shipment_item.get("ItemFeeList", [])
-						seller_sku = shipment_item.get("SellerSKU")
+						seller_sku = shipment_item.get("SellerSKU", "N/A")
 
+						# Process Item Charges
+						charges = shipment_item.get("ItemChargeList", [])
 						for charge in charges:
 							charge_type = charge.get("ChargeType")
 							amount = charge.get("ChargeAmount", {}).get("CurrencyAmount", 0)
@@ -166,7 +190,12 @@ class AmazonRepository:
 										"description": charge_type + " for " + seller_sku,
 									}
 								)
+								frappe.logger().debug(
+									f"Added shipment charge: {charge_type} = {amount} for SKU {seller_sku}"
+								)
 
+						# Process Item Fees
+						fees = shipment_item.get("ItemFeeList", [])
 						for fee in fees:
 							fee_type = fee.get("FeeType")
 							amount = fee.get("FeeAmount", {}).get("CurrencyAmount", 0)
@@ -181,16 +210,91 @@ class AmazonRepository:
 										"description": fee_type + " for " + seller_sku,
 									}
 								)
+								frappe.logger().debug(
+									f"Added shipment fee: {fee_type} = {amount} for SKU {seller_sku}"
+								)
 
-			if not next_token:
-				break
+				# ===== Process Service Fee Events =====
+				service_fee_event_list = financial_events.get("ServiceFeeEventList", [])
+				for service_fee_event in service_fee_event_list:
+					if not service_fee_event:
+						continue
 
-			financial_events_payload = self.call_sp_api_method(
-				sp_api_method=finances.list_financial_events_by_order_id,
-				order_id=order_id,
-				next_token=next_token,
+					for fee_component in service_fee_event.get("FeeList", []):
+						fee_type = fee_component.get("FeeType", "Service Fee")
+						amount = fee_component.get("FeeAmount", {}).get("CurrencyAmount", 0)
+
+						if float(amount) != 0:
+							fee_account = self.get_account(fee_type)
+							charges_and_fees.get("fees").append(
+								{
+									"charge_type": "Actual",
+									"account_head": fee_account,
+									"tax_amount": amount,
+									"description": f"{fee_type} (Service Fee)",
+								}
+							)
+							frappe.logger().debug(
+								f"Added service fee: {fee_type} = {amount}"
+							)
+
+				# ===== Process Refund Events (negative amounts) =====
+				refund_event_list = financial_events.get("RefundEventList", [])
+				for refund_event in refund_event_list:
+					if not refund_event:
+						continue
+
+					for refund_item in refund_event.get("ShipmentItemList", []):
+						seller_sku = refund_item.get("SellerSKU", "N/A")
+
+						charges = refund_item.get("ItemChargeList", [])
+						for charge in charges:
+							charge_type = charge.get("ChargeType")
+							amount = charge.get("ChargeAmount", {}).get("CurrencyAmount", 0)
+
+							if float(amount) != 0:
+								charge_account = self.get_account(charge_type)
+								charges_and_fees.get("charges").append(
+									{
+										"charge_type": "Actual",
+										"account_head": charge_account,
+										"tax_amount": amount,
+										"description": f"Refund: {charge_type} for {seller_sku}",
+									}
+								)
+								frappe.logger().debug(
+									f"Added refund charge: {charge_type} = {amount} for SKU {seller_sku}"
+								)
+
+				# Check for pagination
+				if not next_token:
+					break
+
+				# Fetch next page
+				financial_events_payload = self.call_sp_api_method(
+					sp_api_method=finances.list_financial_events_by_order_id,
+					order_id=order_id,
+					next_token=next_token,
+				)
+
+				if not financial_events_payload:
+					frappe.logger().warning(
+						f"No payload received for next page of financial events for order: {order_id}"
+					)
+					break
+
+		except Exception as e:
+			frappe.logger().error(
+				f"Error processing charges and fees for order {order_id}: {str(e)}"
+			)
+			frappe.log_error(
+				frappe.get_traceback(),
+				f"Error in get_charges_and_fees for order {order_id}"
 			)
 
+		frappe.logger().info(
+			f"Charges and Fees Summary for {order_id}: {len(charges_and_fees['charges'])} charges, {len(charges_and_fees['fees'])} fees"
+		)
 		return charges_and_fees
 
 	def get_orders_instance(self) -> Orders:
@@ -442,6 +546,8 @@ class AmazonRepository:
 				amount = order_item.get("ItemPrice", {}).get("Amount", 0)
 				quantity = order_item.get("QuantityOrdered", 0)
 				rate = float(amount) / quantity if quantity else 0
+				shipping_amount = order_item.get("ShippingPrice", {}).get("Amount", 0)
+				shipping_amount = float(shipping_amount) if shipping_amount else 0				
 
 				# if item_code == "28-UUX3-SJMN":
 					# print("\n\n\n===== DEBUG ITEM CODE MATCHED =====\n\n\n")
@@ -455,6 +561,7 @@ class AmazonRepository:
 							"description": order_item.get("Title"),
 							"rate": rate,
 							"qty": quantity,
+							"shipping_amount": shipping_amount,
 							"stock_uom": "Nos",
 							"warehouse": warehouse,
 							"conversion_factor": 1.0,
@@ -589,16 +696,43 @@ class AmazonRepository:
 				so.append("items", item)
 
 			taxes_and_charges = self.amz_setting.taxes_charges
+			
+			# if taxes_and_charges:
+			# 	charges_and_fees = self.get_charges_and_fees(order_id)
+
+			# 	for charge in charges_and_fees.get("charges"):
+			# 		so.append("taxes", charge)
+
+			# 	for fee in charges_and_fees.get("fees"):
+			# 		so.append("taxes", fee)
+
+			from erpnext.controllers.accounts_controller import get_taxes_and_charges
+			import copy
 
 			if taxes_and_charges:
-				charges_and_fees = self.get_charges_and_fees(order_id)
+				template_taxes = get_taxes_and_charges(
+					"Sales Taxes and Charges Template",
+					self.amz_setting.sales_tax_template
+				)
+			
+				for tax in template_taxes:
+					tax = copy.deepcopy(tax)
+					tax.pop("name", None)
+					tax.pop("parent", None)
+					tax.pop("parentfield", None)
+					tax.pop("parenttype", None)
+					tax.pop("doctype", None)
+					so.append("taxes", tax)
 
-				for charge in charges_and_fees.get("charges"):
-					so.append("taxes", charge)
-
-				for fee in charges_and_fees.get("fees"):
-					so.append("taxes", fee)
-
+			total_shipping = sum(item.get("shipping_amount", 0) for item in items)
+			if total_shipping:
+				
+				so.append("taxes", {
+					"charge_type": "Actual",
+					"account_head": self.amz_setting.shipment_charges_account, # self.amz_setting.shipping_account,
+					"description": "Amazon Shipping",
+					"tax_amount": total_shipping
+				})
 			so.insert(ignore_permissions=True)
 			so.submit()
 

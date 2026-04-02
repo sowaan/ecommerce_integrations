@@ -23,6 +23,11 @@ from ecommerce_integrations.amazon.doctype.amazon_sp_api_settings.amazon_sp_api_
 
 class AmazonRepository:
 
+	REGION_COST_CENTER_ALIASES = {
+		"AE": ("UAE", "United Arab Emirates", "AE"),
+		"SA": ("KSA.", "KSA", "Saudi Arabia", "SA"),
+	}
+
 	def __init__(self, amz_setting: str | AmazonSPAPISettings) -> None:
 		if isinstance(amz_setting, str):
 			amz_setting = frappe.get_doc("Amazon SP API Settings", amz_setting)
@@ -130,6 +135,30 @@ class AmazonRepository:
 			account_name = new_account.name
 
 		return account_name
+
+	def get_country_name(self, country_code: str | None) -> str | None:
+		if not country_code:
+			return None
+
+		country_code = country_code.upper()
+		country = frappe.db.get_value("Country", {"code": country_code}, "name")
+		return country or country_code
+
+	def get_region_cost_center(self, country_code: str | None) -> str | None:
+		if not country_code:
+			return None
+
+		company_abbr = frappe.db.get_value("Company", self.amz_setting.company, "abbr")
+		if not company_abbr:
+			return None
+
+		aliases = self.REGION_COST_CENTER_ALIASES.get(country_code.upper(), (country_code.upper(),))
+		for alias in aliases:
+			cost_center_name = f"{alias} - {company_abbr}"
+			if frappe.db.exists("Cost Center", cost_center_name):
+				return cost_center_name
+
+		return None
 
 	def get_charges_and_fees(self, order_id) -> dict:
 		"""
@@ -634,8 +663,10 @@ class AmazonRepository:
 				make_address = frappe.new_doc("Address")
 				make_address.address_line1 = shipping_address.get("AddressLine1", "Not Provided")
 				make_address.city = shipping_address.get("City", "Not Provided")
-				make_address.state = shipping_address.get("StateOrRegion").title()
+				state = shipping_address.get("StateOrRegion")
+				make_address.state = state.title() if state else None
 				make_address.pincode = shipping_address.get("PostalCode")
+				make_address.country = self.get_country_name(shipping_address.get("CountryCode"))
 
 				filters = [
 					["Dynamic Link", "link_doctype", "=", "Customer"],
@@ -650,11 +681,12 @@ class AmazonRepository:
 						address_doc.address_line1 == make_address.address_line1
 						and address_doc.pincode == make_address.pincode
 					):
-						return address
+						return address_doc.name
 
 				make_address.append("links", {"link_doctype": "Customer", "link_name": customer_name})
 				make_address.address_type = "Shipping"
 				make_address.insert()
+				return make_address.name
 
 		order_id = order.get("AmazonOrderId")
 		so = frappe.db.get_value("Sales Order", filters={"amazon_order_id": order_id}, fieldname="name")
@@ -670,7 +702,9 @@ class AmazonRepository:
 				return
 
 			customer_name = create_customer(order)
-			create_address(order, customer_name)
+			shipping_address_name = create_address(order, customer_name)
+			shipping_country_code = (order.get("ShippingAddress") or {}).get("CountryCode")
+			cost_center = self.get_region_cost_center(shipping_country_code)
 
 			# delivery_date = dateutil.parser.parse(order.get("LatestShipDate")).strftime("%Y-%m-%d")
 			# transaction_date = dateutil.parser.parse(order.get("PurchaseDate")).strftime("%Y-%m-%d")
@@ -691,8 +725,16 @@ class AmazonRepository:
 			so.delivery_date = delivery_date
 			so.transaction_date = transaction_date
 			so.company = self.amz_setting.company
+			if shipping_address_name:
+				so.customer_address = shipping_address_name
+				if so.meta.has_field("shipping_address_name"):
+					so.shipping_address_name = shipping_address_name
+			if cost_center and so.meta.has_field("cost_center"):
+				so.cost_center = cost_center
 
 			for item in items:
+				if cost_center:
+					item["cost_center"] = cost_center
 				so.append("items", item)
 
 			taxes_and_charges = self.amz_setting.taxes_charges
@@ -722,6 +764,8 @@ class AmazonRepository:
 					tax.pop("parentfield", None)
 					tax.pop("parenttype", None)
 					tax.pop("doctype", None)
+					if cost_center:
+						tax["cost_center"] = cost_center
 					so.append("taxes", tax)
 
 			total_shipping = sum(item.get("shipping_amount", 0) for item in items)
@@ -731,7 +775,8 @@ class AmazonRepository:
 					"charge_type": "Actual",
 					"account_head": self.amz_setting.shipment_charges_account, # self.amz_setting.shipping_account,
 					"description": "Amazon Shipping",
-					"tax_amount": total_shipping
+					"tax_amount": total_shipping,
+					"cost_center": cost_center,
 				})
 			so.insert(ignore_permissions=True)
 			so.submit()

@@ -160,6 +160,40 @@ class AmazonRepository:
 
 		return None
 
+	def ensure_warehouse(self, warehouse_name: str | None) -> str:
+		if not warehouse_name:
+			return self.amz_setting.warehouse
+
+		existing_warehouse = frappe.db.get_value(
+			"Warehouse",
+			{"warehouse_name": warehouse_name, "company": self.amz_setting.company},
+			"name",
+		)
+		if existing_warehouse:
+			return existing_warehouse
+
+		warehouse = frappe.new_doc("Warehouse")
+		warehouse.warehouse_name = warehouse_name
+		warehouse.company = self.amz_setting.company
+		warehouse.insert(ignore_permissions=True)
+		return warehouse.name
+
+	def get_warehouse(self, order) -> str:
+		ship_from = order.get("DefaultShipFromLocationAddress") or {}
+		city = ship_from.get("City")
+
+		if city == "Jeddah":
+			return self.ensure_warehouse("FBB-Jeddah")
+
+		fulfillment = order.get("FulfillmentChannel")
+		if fulfillment == "AFN":
+			return self.ensure_warehouse("FBA-Stores")
+
+		if fulfillment == "MFN":
+			return self.ensure_warehouse("FBB-Stores")
+
+		return self.amz_setting.warehouse
+
 	def get_charges_and_fees(self, order_id) -> dict:
 		"""
 		Retrieve charges and fees for an Amazon order from financial events.
@@ -548,11 +582,12 @@ class AmazonRepository:
 		item_code = self.create_item(order_item)
 		return item_code
 
-	def get_order_items(self, order_id) -> list:
+	def get_order_items(self, order) -> list:
 	    # Sandbox does not support order items API
 		if self.amz_setting.use_sandbox:
 			return []
-	
+
+		order_id = order.get("AmazonOrderId")
 		orders = self.get_orders_instance()
 		order_items_payload = self.call_sp_api_method(
 			sp_api_method=orders.get_order_items, order_id=order_id
@@ -561,7 +596,7 @@ class AmazonRepository:
 
 		order_items_list = order_items_payload.get("OrderItems")
 		final_order_items = []
-		warehouse = self.amz_setting.warehouse
+		warehouse = self.get_warehouse(order)
 
 		while True:
 
@@ -592,7 +627,7 @@ class AmazonRepository:
 							"qty": quantity,
 							"shipping_amount": shipping_amount,
 							"stock_uom": "Nos",
-							"warehouse": warehouse,
+							"warehouse": warehouse or self.amz_setting.warehouse,
 							"conversion_factor": 1.0,
 						}
 					)
@@ -694,7 +729,7 @@ class AmazonRepository:
 		if so:
 			return so
 		else:
-			items = self.get_order_items(order_id)
+			items = self.get_order_items(order)
 			# print("DEBUG ORDER ITEMS:", items)
 
 			if not items:

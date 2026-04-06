@@ -117,7 +117,8 @@ class AmazonSPAPISettings(Document):
 				job_name=job_name,
 				method=get_orders,
 				amz_setting_name=self.name,
-				created_after=self.after_date,
+				created_after=get_orders_created_after(self),
+				update_last_sync_at=True,
 				timeout=4000,
 				now=frappe.flags.in_test,
 			)
@@ -138,11 +139,19 @@ def schedule_get_order_details():
 	amz_settings = frappe.get_all(
 		"Amazon SP API Settings",
 		filters={"is_active": 1, "enable_sync": 1},
-		fields=["name", "after_date"],
+		fields=["name", "after_date", "last_order_sync_at"],
 	)
 
 	for amz_setting in amz_settings:
-		get_orders(amz_setting_name=amz_setting.name, created_after=amz_setting.after_date)
+		get_orders(
+			amz_setting_name=amz_setting.name,
+			created_after=get_orders_created_after(amz_setting),
+			update_last_sync_at=True,
+		)
+
+
+def get_orders_created_after(amz_setting):
+	return amz_setting.get("last_order_sync_at") or amz_setting.get("after_date")
 
 
 def setup_custom_fields():

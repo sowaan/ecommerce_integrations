@@ -33,6 +33,7 @@
   "create_item_if_not_exists",
   "section_break_3",
   "after_date",
+  "last_order_sync_at",
   "taxes_charges",
   "sales_tax_template",
   "shipment_charges_account",
@@ -284,10 +285,15 @@
    "label": "Shipment Charges Account",
    "link_filters": "[[\"Account\",\"name\",\"like\",\"%amazon%\"]]",
    "options": "Account"
+  },
+  {
+   "fieldname": "last_order_sync_at",
+   "fieldtype": "Datetime",
+   "label": "Last Order Sync At"
   }
  ],
  "links": [],
- "modified": "2026-04-01 14:32:18.541141",
+ "modified": "2026-04-06 16:17:53.038113",
  "modified_by": "Administrator",
  "module": "Amazon",
  "name": "Amazon SP API Settings",

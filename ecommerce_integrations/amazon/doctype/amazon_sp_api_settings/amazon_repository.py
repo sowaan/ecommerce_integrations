@@ -8,6 +8,7 @@ import urllib
 import dateutil
 import frappe
 from frappe import _
+from frappe.utils import now
 
 from ecommerce_integrations.amazon.doctype.amazon_sp_api_settings.amazon_sp_api import (
 	SPAPI,
@@ -920,6 +921,11 @@ def validate_amazon_sp_api_credentials(**args) -> None:
 		frappe.throw(msg)
 
 
-def get_orders(amz_setting_name, created_after) -> list:
+def get_orders(amz_setting_name, created_after, update_last_sync_at=False) -> list:
 	ar = AmazonRepository(amz_setting_name)
-	return ar.get_orders(created_after)
+	sales_orders = ar.get_orders(created_after)
+
+	if update_last_sync_at:
+		ar.amz_setting.db_set("last_order_sync_at", now())
+
+	return sales_orders

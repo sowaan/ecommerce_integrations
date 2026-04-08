@@ -4,6 +4,7 @@
 
 import time
 import urllib
+from datetime import timezone
 
 import dateutil
 import frappe
@@ -79,6 +80,15 @@ class AmazonRepository:
 					# print("SP API returned None")
 					return None
 
+				if result.get("errors"):
+					error = result.get("errors")[0] or {}
+					raise SPAPIError(
+						error=error.get("code") or error.get("message") or "amazon_api_error",
+						error_description=error.get("message")
+						or error.get("details")
+						or str(result.get("errors")),
+					)
+
 				payload = result.get("payload")
 
 				# print("PAYLOAD:", payload)
@@ -137,6 +147,62 @@ class AmazonRepository:
 
 		return account_name
 
+	def is_shipping_charge_type(self, charge_type: str | None) -> bool:
+		if not charge_type:
+			return False
+
+		return "shipping" in charge_type.lower()
+
+	def get_additional_charge_tax_rows(
+		self, order_id: str, items: list, cost_center: str | None = None
+	) -> list[dict]:
+		additional_rows = []
+		shipping_charge_loaded_from_finances = False
+		taxes_and_charges = self.amz_setting.taxes_charges
+
+		if taxes_and_charges:
+			try:
+				charges_and_fees = self.get_charges_and_fees(order_id)
+
+				for row_type in ("charges", "fees"):
+					for row in charges_and_fees.get(row_type, []):
+						charge_type = row.get("amazon_charge_type")
+						if self.is_shipping_charge_type(charge_type):
+							shipping_charge_loaded_from_finances = True
+
+						additional_rows.append(
+							{
+								"charge_type": row.get("charge_type"),
+								"account_head": row.get("account_head"),
+								"description": row.get("description"),
+								"tax_amount": row.get("tax_amount"),
+								"cost_center": cost_center,
+							}
+						)
+			except Exception:
+				frappe.log_error(
+					frappe.get_traceback(),
+					f"Amazon financial events unavailable for order {order_id}",
+				)
+				frappe.logger().warning(
+					f"Skipping Amazon financial event charges for order {order_id}; using shipping fallback if available."
+				)
+
+		if not shipping_charge_loaded_from_finances:
+			total_shipping = sum(item.get("shipping_amount", 0) for item in items)
+			if total_shipping:
+				additional_rows.append(
+					{
+						"charge_type": "Actual",
+						"account_head": self.amz_setting.shipment_charges_account,
+						"description": "Amazon Shipping",
+						"tax_amount": total_shipping,
+						"cost_center": cost_center,
+					}
+				)
+
+		return additional_rows
+
 	def get_country_name(self, country_code: str | None) -> str | None:
 		if not country_code:
 			return None
@@ -144,6 +210,20 @@ class AmazonRepository:
 		country_code = country_code.upper()
 		country = frappe.db.get_value("Country", {"code": country_code}, "name")
 		return country or country_code
+
+	def format_sp_api_datetime(self, value) -> str | None:
+		if not value:
+			return None
+
+		value = str(value)
+		if "T" in value and (value.endswith("Z") or "+" in value[10:]):
+			return value
+
+		parsed = dateutil.parser.parse(value)
+		if parsed.tzinfo is None:
+			parsed = parsed.replace(tzinfo=timezone.utc)
+
+		return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 	def get_region_cost_center(self, country_code: str | None) -> str | None:
 		if not country_code:
@@ -252,6 +332,7 @@ class AmazonRepository:
 										"account_head": charge_account,
 										"tax_amount": amount,
 										"description": charge_type + " for " + seller_sku,
+										"amazon_charge_type": charge_type,
 									}
 								)
 								frappe.logger().debug(
@@ -272,6 +353,7 @@ class AmazonRepository:
 										"account_head": fee_account,
 										"tax_amount": amount,
 										"description": fee_type + " for " + seller_sku,
+										"amazon_charge_type": fee_type,
 									}
 								)
 								frappe.logger().debug(
@@ -296,6 +378,7 @@ class AmazonRepository:
 									"account_head": fee_account,
 									"tax_amount": amount,
 									"description": f"{fee_type} (Service Fee)",
+									"amazon_charge_type": fee_type,
 								}
 							)
 							frappe.logger().debug(
@@ -324,6 +407,7 @@ class AmazonRepository:
 										"account_head": charge_account,
 										"tax_amount": amount,
 										"description": f"Refund: {charge_type} for {seller_sku}",
+										"amazon_charge_type": charge_type,
 									}
 								)
 								frappe.logger().debug(
@@ -774,15 +858,6 @@ class AmazonRepository:
 				so.append("items", item)
 
 			taxes_and_charges = self.amz_setting.taxes_charges
-			
-			# if taxes_and_charges:
-			# 	charges_and_fees = self.get_charges_and_fees(order_id)
-
-			# 	for charge in charges_and_fees.get("charges"):
-			# 		so.append("taxes", charge)
-
-			# 	for fee in charges_and_fees.get("fees"):
-			# 		so.append("taxes", fee)
 
 			from erpnext.controllers.accounts_controller import get_taxes_and_charges
 			import copy
@@ -804,23 +879,15 @@ class AmazonRepository:
 						tax["cost_center"] = cost_center
 					so.append("taxes", tax)
 
-			total_shipping = sum(item.get("shipping_amount", 0) for item in items)
-			if total_shipping:
-				
-				so.append("taxes", {
-					"charge_type": "Actual",
-					"account_head": self.amz_setting.shipment_charges_account, # self.amz_setting.shipping_account,
-					"description": "Amazon Shipping",
-					"tax_amount": total_shipping,
-					"cost_center": cost_center,
-				})
+			for additional_tax in self.get_additional_charge_tax_rows(order_id, items, cost_center):
+				so.append("taxes", additional_tax)
 			so.insert(ignore_permissions=True)
 			so.submit()
 
 			return so.name
 
 	def get_orders(self, created_after) -> list:
-		created_after_value = created_after
+		created_after_value = self.format_sp_api_datetime(created_after)
 
 		if self.amz_setting.use_sandbox:
 			created_after_value = "TEST_CASE_200"

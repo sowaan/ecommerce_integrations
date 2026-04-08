@@ -6,6 +6,7 @@ import json
 import os
 import time
 import unittest
+from types import SimpleNamespace
 
 import frappe
 import responses
@@ -257,6 +258,68 @@ class TestAmazon(unittest.TestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		setup_custom_fields()
+
+	def test_get_additional_charge_tax_rows_uses_financial_shipping_without_duplicate_fallback(self):
+		amazon_repository = AmazonRepository.__new__(AmazonRepository)
+		amazon_repository.amz_setting = SimpleNamespace(
+			taxes_charges=1, shipment_charges_account="Shipment Charges - ATC"
+		)
+		amazon_repository.get_charges_and_fees = lambda order_id: {
+			"charges": [
+				{
+					"charge_type": "Actual",
+					"account_head": "Amazon Shipping Charge - ATC",
+					"tax_amount": 15.0,
+					"description": "ShippingCharge for SKU-1",
+					"amazon_charge_type": "ShippingCharge",
+				}
+			],
+			"fees": [
+				{
+					"charge_type": "Actual",
+					"account_head": "Amazon Commission - ATC",
+					"tax_amount": 5.0,
+					"description": "Commission for SKU-1",
+					"amazon_charge_type": "Commission",
+				}
+			],
+		}
+
+		rows = amazon_repository.get_additional_charge_tax_rows(
+			"ORDER-1", [{"shipping_amount": 15.0}], "Main - ATC"
+		)
+
+		self.assertEqual(len(rows), 2)
+		self.assertEqual(rows[0]["description"], "ShippingCharge for SKU-1")
+		self.assertEqual(rows[1]["description"], "Commission for SKU-1")
+		self.assertFalse(any(row["description"] == "Amazon Shipping" for row in rows))
+
+	def test_get_additional_charge_tax_rows_keeps_shipping_fallback_when_finances_have_no_shipping(self):
+		amazon_repository = AmazonRepository.__new__(AmazonRepository)
+		amazon_repository.amz_setting = SimpleNamespace(
+			taxes_charges=1, shipment_charges_account="Shipment Charges - ATC"
+		)
+		amazon_repository.get_charges_and_fees = lambda order_id: {
+			"charges": [],
+			"fees": [
+				{
+					"charge_type": "Actual",
+					"account_head": "Amazon Closing Fee - ATC",
+					"tax_amount": 3.0,
+					"description": "FixedClosingFee for SKU-1",
+					"amazon_charge_type": "FixedClosingFee",
+				}
+			],
+		}
+
+		rows = amazon_repository.get_additional_charge_tax_rows(
+			"ORDER-2", [{"shipping_amount": 15.0}], "Main - ATC"
+		)
+
+		self.assertEqual(len(rows), 2)
+		self.assertEqual(rows[0]["description"], "FixedClosingFee for SKU-1")
+		self.assertEqual(rows[1]["description"], "Amazon Shipping")
+		self.assertEqual(rows[1]["tax_amount"], 15.0)
 
 	def test_get_orders(self):
 		amazon_repository = TestAmazonRepository()

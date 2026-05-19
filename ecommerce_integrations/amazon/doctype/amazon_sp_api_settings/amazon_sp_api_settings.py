@@ -117,7 +117,7 @@ class AmazonSPAPISettings(Document):
 				job_name=job_name,
 				method=get_orders,
 				amz_setting_name=self.name,
-				created_after=get_orders_created_after(self),
+				created_after=self.after_date,
 				update_last_sync_at=True,
 				timeout=4000,
 				now=frappe.flags.in_test,

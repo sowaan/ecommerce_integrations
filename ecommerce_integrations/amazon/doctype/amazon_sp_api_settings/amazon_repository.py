@@ -944,9 +944,15 @@ class AmazonRepository:
 				if order.get("OrderStatus") == "Canceled":
 					continue
 
-				sales_order = self.create_sales_order(order)
-				if sales_order:
-					sales_orders.append(sales_order)
+				try:
+					sales_order = self.create_sales_order(order)
+					if sales_order:
+						sales_orders.append(sales_order)
+				except Exception:
+					frappe.log_error(
+						frappe.get_traceback(),
+						f"Failed to create Sales Order for Amazon order {order.get('AmazonOrderId')}",
+					)
 
 			if not next_token:
 				break

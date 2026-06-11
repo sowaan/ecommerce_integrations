@@ -335,6 +335,23 @@ class Finances(SPAPI):
 		data = dict(MaxResultsPerPage=max_results, NextToken=next_token)
 		return self.make_request(append_to_base_uri=append_to_base_uri, params=data)
 
+	def list_financial_events(
+		self,
+		posted_after: str,
+		posted_before: str = None,
+		max_results: int = 100,
+		next_token: str = None,
+	) -> dict:
+		""" Returns financial events for the specified date range. """
+		append_to_base_uri = "financialEvents"
+		data = dict(
+			PostedAfter=posted_after,
+			PostedBefore=posted_before,
+			MaxResultsPerPage=max_results,
+			NextToken=next_token,
+		)
+		return self.make_request(append_to_base_uri=append_to_base_uri, params=data)
+
 
 class Orders(SPAPI):
 	""" Amazon Orders API """

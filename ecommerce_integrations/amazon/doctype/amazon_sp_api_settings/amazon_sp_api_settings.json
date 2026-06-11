@@ -34,6 +34,7 @@
   "section_break_3",
   "after_date",
   "last_order_sync_at",
+  "last_refund_sync_at",
   "taxes_charges",
   "sales_tax_template",
   "shipment_charges_account",
@@ -290,6 +291,12 @@
    "fieldname": "last_order_sync_at",
    "fieldtype": "Datetime",
    "label": "Last Order Sync At"
+  },
+  {
+   "fieldname": "last_refund_sync_at",
+   "fieldtype": "Datetime",
+   "label": "Last Refund Sync At",
+   "read_only": 1
   }
  ],
  "links": [],

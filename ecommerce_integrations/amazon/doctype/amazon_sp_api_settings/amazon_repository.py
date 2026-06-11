@@ -970,6 +970,238 @@ class AmazonRepository:
 	def get_catalog_items_instance(self) -> CatalogItems:
 		return CatalogItems(**self.instance_params)
 
+	def sync_refunds(self, posted_after) -> list:
+		"""
+		Fetch RefundEventList from the Amazon Finances date-range endpoint and create
+		Return Sales Orders in ERPNext for any refund not yet recorded.
+		"""
+		posted_after_value = self.format_sp_api_datetime(posted_after)
+		finances = self.get_finances_instance()
+
+		payload = self.call_sp_api_method(
+			sp_api_method=finances.list_financial_events,
+			posted_after=posted_after_value,
+		)
+
+		created_returns = []
+
+		while True:
+			if not payload:
+				break
+
+			financial_events = payload.get("FinancialEvents", {})
+			refund_event_list = financial_events.get("RefundEventList", [])
+
+			for refund_event in refund_event_list:
+				if not refund_event:
+					continue
+
+				amazon_order_id = refund_event.get("AmazonOrderId")
+				posted_date = refund_event.get("PostedDate")
+
+				if not amazon_order_id:
+					continue
+
+				# Normalize posted_date to DB format for the dedup check
+				try:
+					posted_date_db = (
+						dateutil.parser.parse(posted_date).strftime("%Y-%m-%d %H:%M:%S")
+						if posted_date else None
+					)
+				except Exception:
+					posted_date_db = None
+
+				# Skip if a return SO already exists for this exact refund event (same order + posted date)
+				existing_return = frappe.db.get_value(
+					"Sales Order",
+					{
+						"amazon_order_id": amazon_order_id,
+						"is_amazon_return": 1,
+						"amazon_return_posted_date": posted_date_db,
+					},
+					"name",
+				)
+				if existing_return:
+					frappe.logger().debug(
+						f"Return SO {existing_return} already exists for order {amazon_order_id} posted {posted_date}"
+					)
+					continue
+
+				# Find the original Sales Order (is_amazon_return is 0 or NULL for originals)
+				all_matching = frappe.get_all(
+					"Sales Order",
+					filters={"amazon_order_id": amazon_order_id},
+					fields=["name", "is_amazon_return"],
+				)
+				original_so_name = next(
+					(o.name for o in all_matching if not o.get("is_amazon_return")),
+					None,
+				)
+
+				if not original_so_name:
+					frappe.logger().warning(
+						f"No original Sales Order found in ERPNext for Amazon refund on order {amazon_order_id}"
+					)
+					continue
+
+				try:
+					return_so = self.create_return_sales_order(
+						refund_event=refund_event,
+						original_so_name=original_so_name,
+					)
+					if return_so:
+						created_returns.append(return_so)
+				except Exception:
+					frappe.log_error(
+						frappe.get_traceback(),
+						f"Failed to create Return Sales Order for Amazon order {amazon_order_id}",
+					)
+
+			next_token = payload.get("NextToken")
+			if not next_token:
+				break
+
+			payload = self.call_sp_api_method(
+				sp_api_method=finances.list_financial_events,
+				posted_after=posted_after_value,
+				next_token=next_token,
+			)
+
+		return created_returns
+
+	def create_return_sales_order(self, refund_event: dict, original_so_name: str) -> str | None:
+		"""
+		Create a Return Sales Order in ERPNext for a single Amazon refund event.
+		Items and rates are derived from the refund's ShipmentItemList; if empty,
+		falls back to the full item list of the original Sales Order.
+		"""
+		amazon_order_id = refund_event.get("AmazonOrderId")
+		posted_date = refund_event.get("PostedDate")
+		# Amazon uses "ShipmentItemAdjustmentList" in RefundEventList (not ShipmentItemList)
+		shipment_items = (
+			refund_event.get("ShipmentItemAdjustmentList")
+			or refund_event.get("ShipmentItemList")
+			or []
+		)
+
+		# Convert ISO 8601 datetime to MySQL-compatible format for the Datetime field
+		try:
+			posted_date_db = dateutil.parser.parse(posted_date).strftime("%Y-%m-%d %H:%M:%S") if posted_date else None
+		except Exception:
+			posted_date_db = None
+
+		original_so = frappe.get_doc("Sales Order", original_so_name)
+
+		# Build SellerSKU → original SO item row lookup
+		sku_to_item = {item.item_name: item for item in original_so.items if item.item_name}
+
+		return_items = []
+		for refund_item in shipment_items:
+			seller_sku = refund_item.get("SellerSKU")
+			qty = int(refund_item.get("QuantityShipped") or 1)
+
+			# Use the Principal charge amount as the item rate (amounts are negative for refunds, take abs)
+			principal_amount = 0.0
+			# Amazon uses ItemChargeAdjustmentList in RefundEventList (not ItemChargeList)
+			charge_list = (
+				refund_item.get("ItemChargeAdjustmentList")
+				or refund_item.get("ItemChargeList")
+				or []
+			)
+			for charge in charge_list:
+				if charge.get("ChargeType") == "Principal":
+					principal_amount = abs(
+						float(charge.get("ChargeAmount", {}).get("CurrencyAmount", 0) or 0)
+					)
+
+			original_item = sku_to_item.get(seller_sku) or next(
+				(i for i in original_so.items if i.item_code == seller_sku), None
+			)
+
+			if original_item:
+				rate = (principal_amount / qty) if qty and principal_amount else original_item.rate
+				return_items.append({
+					"item_code": original_item.item_code,
+					"item_name": original_item.item_name,
+					"description": original_item.description,
+					"qty": qty,
+					"rate": rate,
+					"stock_uom": original_item.stock_uom or "Nos",
+					"warehouse": original_item.warehouse or self.amz_setting.warehouse,
+					"conversion_factor": 1.0,
+				})
+			else:
+				frappe.logger().warning(
+					f"SKU {seller_sku} not found in original SO {original_so_name}; adding by code directly"
+				)
+				rate = (principal_amount / qty) if qty and principal_amount else 0
+				return_items.append({
+					"item_code": seller_sku,
+					"item_name": seller_sku,
+					"qty": qty,
+					"rate": rate,
+					"stock_uom": "Nos",
+					"warehouse": self.amz_setting.warehouse,
+					"conversion_factor": 1.0,
+				})
+
+		# ShipmentItemAdjustmentList was empty — fall back to the original SO's full item list
+		if not return_items:
+			frappe.logger().info(
+				f"ShipmentItemAdjustmentList empty for Amazon refund on order {amazon_order_id}; "
+				f"copying items from original SO {original_so_name}"
+			)
+			for item in original_so.items:
+				return_items.append({
+					"item_code": item.item_code,
+					"item_name": item.item_name,
+					"description": item.description,
+					"qty": item.qty,
+					"rate": item.rate,
+					"stock_uom": item.stock_uom or "Nos",
+					"warehouse": item.warehouse or self.amz_setting.warehouse,
+					"conversion_factor": 1.0,
+				})
+
+		if not return_items:
+			frappe.logger().warning(f"No items resolved for return on Amazon order {amazon_order_id}; skipping")
+			return None
+
+		try:
+			return_date = dateutil.parser.parse(posted_date).date() if posted_date else frappe.utils.today()
+		except Exception:
+			return_date = frappe.utils.today()
+
+		so = frappe.new_doc("Sales Order")
+		so.amazon_order_id = amazon_order_id
+		so.is_amazon_return = 1
+		so.amazon_return_posted_date = posted_date_db
+		so.customer = original_so.customer
+		so.company = self.amz_setting.company
+		so.transaction_date = return_date
+		so.delivery_date = return_date
+
+		if original_so.customer_address:
+			so.customer_address = original_so.customer_address
+		if so.meta.has_field("shipping_address_name") and original_so.get("shipping_address_name"):
+			so.shipping_address_name = original_so.shipping_address_name
+		if so.meta.has_field("cost_center") and original_so.get("cost_center"):
+			so.cost_center = original_so.cost_center
+
+		cost_center = original_so.get("cost_center") if so.meta.has_field("cost_center") else None
+		for item in return_items:
+			if cost_center:
+				item["cost_center"] = cost_center
+			so.append("items", item)
+
+		so.insert(ignore_permissions=True)
+		so.submit()
+
+		frappe.logger().info(
+			f"Created Return Sales Order {so.name} for Amazon order {amazon_order_id} (posted {posted_date})"
+		)
+		return so.name
+
 
 def validate_amazon_sp_api_credentials(**args) -> None:
 	api = SPAPI(
@@ -1002,3 +1234,13 @@ def get_orders(amz_setting_name, created_after, update_last_sync_at=False) -> li
 		ar.amz_setting.db_set("last_order_sync_at", now())
 
 	return sales_orders
+
+
+def sync_refunds(amz_setting_name, posted_after, update_last_sync_at=False) -> list:
+	ar = AmazonRepository(amz_setting_name)
+	return_orders = ar.sync_refunds(posted_after)
+
+	if update_last_sync_at:
+		ar.amz_setting.db_set("last_refund_sync_at", now())
+
+	return return_orders

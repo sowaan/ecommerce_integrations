@@ -103,10 +103,6 @@ class AmazonSPAPISettings(Document):
 
 	@frappe.whitelist()
 	def get_order_details(self):
-		from ecommerce_integrations.amazon.doctype.amazon_sp_api_settings.amazon_repository import (
-			get_orders,
-		)
-
 		if self.is_active == 1:
 			job_name = f"Get Amazon Orders - {self.name}"
 
@@ -115,10 +111,10 @@ class AmazonSPAPISettings(Document):
 
 			frappe.enqueue(
 				job_name=job_name,
-				method=get_orders,
+				method=sync_orders_and_refunds,
 				amz_setting_name=self.name,
 				created_after=self.after_date,
-				update_last_sync_at=True,
+				posted_after=get_refunds_posted_after(self),
 				timeout=4000,
 				now=frappe.flags.in_test,
 			)
@@ -130,16 +126,27 @@ class AmazonSPAPISettings(Document):
 			)
 
 
+def sync_orders_and_refunds(amz_setting_name, created_after, posted_after):
+	from ecommerce_integrations.amazon.doctype.amazon_sp_api_settings.amazon_repository import (
+		get_orders,
+		sync_refunds,
+	)
+
+	get_orders(amz_setting_name=amz_setting_name, created_after=created_after, update_last_sync_at=True)
+	sync_refunds(amz_setting_name=amz_setting_name, posted_after=posted_after, update_last_sync_at=True)
+
+
 # Called via a hook in every hour.
 def schedule_get_order_details():
 	from ecommerce_integrations.amazon.doctype.amazon_sp_api_settings.amazon_repository import (
 		get_orders,
+		sync_refunds,
 	)
 
 	amz_settings = frappe.get_all(
 		"Amazon SP API Settings",
 		filters={"is_active": 1, "enable_sync": 1},
-		fields=["name", "after_date", "last_order_sync_at"],
+		fields=["name", "after_date", "last_order_sync_at", "last_refund_sync_at"],
 	)
 
 	for amz_setting in amz_settings:
@@ -148,10 +155,19 @@ def schedule_get_order_details():
 			created_after=get_orders_created_after(amz_setting),
 			update_last_sync_at=True,
 		)
+		sync_refunds(
+			amz_setting_name=amz_setting.name,
+			posted_after=get_refunds_posted_after(amz_setting),
+			update_last_sync_at=True,
+		)
 
 
 def get_orders_created_after(amz_setting):
 	return amz_setting.get("last_order_sync_at") or amz_setting.get("after_date")
+
+
+def get_refunds_posted_after(amz_setting):
+	return amz_setting.get("last_refund_sync_at") or amz_setting.get("after_date")
 
 
 def setup_custom_fields():
@@ -164,11 +180,29 @@ def setup_custom_fields():
 				insert_after="title",
 				read_only=1,
 				print_hide=1,
-			)
+			),
+			dict(
+				fieldname="is_amazon_return",
+				label="Is Amazon Return",
+				fieldtype="Check",
+				insert_after="amazon_order_id",
+				default="0",
+				read_only=1,
+				hidden=1,
+				print_hide=1,
+			),
+			dict(
+				fieldname="amazon_return_posted_date",
+				label="Amazon Return Posted Date",
+				fieldtype="Datetime",
+				insert_after="is_amazon_return",
+				read_only=1,
+				print_hide=1,
+			),
 		],
 	}
 
-	create_custom_fields(custom_fields)
+	create_custom_fields(custom_fields, ignore_validate=True)
 
 
 def migrate_old_data():

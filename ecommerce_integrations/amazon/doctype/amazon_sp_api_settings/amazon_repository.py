@@ -125,7 +125,7 @@ class AmazonRepository:
 			)
 
 		self.amz_setting.enable_sync = 0
-		self.amz_setting.save()
+		self.amz_setting.save(ignore_permissions=True)
 
 		frappe.throw(
 			_("Scheduled sync has been temporarily disabled because maximum retries have been exceeded!")

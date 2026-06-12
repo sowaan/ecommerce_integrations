@@ -2,13 +2,11 @@
 # For license information, please see license.txt
 
 
-from datetime import datetime
-
 import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.model.document import Document
-from frappe.utils import add_days, today
+from frappe.utils import add_days, getdate, today
 
 
 class AmazonSPAPISettings(Document):
@@ -72,9 +70,7 @@ class AmazonSPAPISettings(Document):
 			frappe.throw(_("Only one field can be selected to find the item code."))
 
 	def validate_after_date(self):
-		if datetime.strptime(str(add_days(today(), -30)), "%Y-%m-%d") > datetime.strptime(
-			self.after_date, "%Y-%m-%d"
-		):
+		if getdate(add_days(today(), -30)) > getdate(self.after_date):
 			frappe.throw(_("The date must be within the last 30 days."))
 
 	def validate_credentials(self):

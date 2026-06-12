@@ -72,7 +72,7 @@ class AmazonSPAPISettings(Document):
 			frappe.throw(_("Only one field can be selected to find the item code."))
 
 	def validate_after_date(self):
-		if datetime.strptime(add_days(today(), -30), "%Y-%m-%d") > datetime.strptime(
+		if datetime.strptime(str(add_days(today(), -30)), "%Y-%m-%d") > datetime.strptime(
 			self.after_date, "%Y-%m-%d"
 		):
 			frappe.throw(_("The date must be within the last 30 days."))

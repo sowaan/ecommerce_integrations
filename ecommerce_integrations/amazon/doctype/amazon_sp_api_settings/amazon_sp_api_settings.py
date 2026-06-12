@@ -31,8 +31,8 @@ class AmazonSPAPISettings(Document):
 		elif self.max_retry_limit and self.max_retry_limit > 5:
 			frappe.throw(frappe._("Value for <b>Max Retry Limit</b> must be less than or equal to 5."))
 
-	def save(self):
-		super(AmazonSPAPISettings, self).save()
+	def save(self, *args, **kwargs):
+		super(AmazonSPAPISettings, self).save(*args, **kwargs)
 
 		if not self.is_old_data_migrated:
 			migrate_old_data()

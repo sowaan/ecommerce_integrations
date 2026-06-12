@@ -75,6 +75,23 @@ doctype_js = {
 
 before_uninstall = "ecommerce_integrations.uninstall.before_uninstall"
 
+fixtures = [
+	{
+		"dt": "Custom Field",
+		"filters": [
+			[
+				"name",
+				"in",
+				[
+					"Sales Order-amazon_order_id",
+					"Sales Order-is_amazon_return",
+					"Sales Order-amazon_return_posted_date",
+				],
+			]
+		],
+	}
+]
+
 # Desk Notifications
 # ------------------
 # See frappe.core.notifications.get_notification_config

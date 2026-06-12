@@ -8,8 +8,9 @@ from datetime import timezone
 
 import dateutil
 import frappe
+import pytz
 from frappe import _
-from frappe.utils import now
+from frappe.utils import get_system_timezone, now
 
 from ecommerce_integrations.amazon.doctype.amazon_sp_api_settings.amazon_sp_api import (
 	SPAPI,
@@ -221,7 +222,9 @@ class AmazonRepository:
 
 		parsed = dateutil.parser.parse(value)
 		if parsed.tzinfo is None:
-			parsed = parsed.replace(tzinfo=timezone.utc)
+			# Naive datetimes (e.g. from frappe.utils.now()) are in the site's
+			# system timezone, not UTC.
+			parsed = pytz.timezone(get_system_timezone()).localize(parsed)
 
 		return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
